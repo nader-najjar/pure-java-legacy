@@ -115,8 +115,18 @@ tasks.named<Sync>("installDist") {
     into(layout.buildDirectory.dir("release/executable"))
 }
 
+tasks.register<Tar>("packageRelease") {
+    archiveFileName.set("release-artifact.tar.gz")
+    destinationDirectory.set(layout.buildDirectory)
+    compression = Compression.GZIP
+    from("Dockerfile", "flake.nix", "flake.lock", ".dockerignore")
+    from(tasks.named("installDist")) {
+        into("executable")
+    }
+}
+
 tasks.named("build") {
-    dependsOn(tasks.named("installDist"))
+    dependsOn(tasks.named("packageRelease"))
 }
 
 /**

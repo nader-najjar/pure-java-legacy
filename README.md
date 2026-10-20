@@ -1,4 +1,4 @@
-# template-pure-java
+# pure-java-legacy
 
 Java best practices.
 
@@ -30,15 +30,11 @@ Java best practices.
 * Runs Checkstyle
 * Runs SpotBugs
 * Uses Gradle's Distribution plugin to assemble the application JAR and runtime dependency JARs under `build/release/executable/lib`, without generated launch scripts
-* Produces application artifacts without constructing an image
+* Packages `build/release-artifact.tar.gz` with the runtime JARs and image-build inputs, without constructing an image
 
-### Fleet artifacts and image packaging
+### Release archive
 
-Gradle's `installDist`, included in `build`, assembles the application payload under `build/release/executable`. The CI tar command combines that directory with `Dockerfile`, `flake.nix`, `flake.lock`, and `.dockerignore` from the checkout. No staging script or extra copy is needed.
-
-The separate CD job downloads the complete image-build context archive from the triggering CI workflow run and packages it using Docker's official Buildx and build-push actions. The workflow pins the action commits, Buildx version, and BuildKit image digest. The archive contains `Dockerfile`, `flake.nix`, `flake.lock`, `.dockerignore`, and `executable/`. CD extracts these directly into its workspace and uses them as the build context. It exports the Linux/ARM64 image directly to an archive.
-
-Packaging consumes the staged artifact and does not run application compilation or tests. The workflow exports `build/oci-image.tar`.
+The build produces `build/release-artifact.tar.gz`, containing `Dockerfile`, `flake.nix`, `flake.lock`, `.dockerignore`, and `executable/lib/` with the application and runtime dependency JARs. Image packaging can extract this archive directly as its complete build context without recompiling the application.
 
 ### `./universal-build clean`
 
@@ -54,29 +50,13 @@ Packaging consumes the staged artifact and does not run application compilation 
 
 &nbsp;
 
-## Release pipeline
+## Materialization
 
-Application compilation and image packaging are separate. `.github/workflows/ci.yml` runs application checks on `ubuntu-24.04-arm`, produces the Linux/ARM64 payload under `build/release`, and uploads an archive that preserves executable permissions. After CI succeeds on a push to `main`, `.github/workflows/cd.yml` downloads that CI run's named artifact and assembles the image entirely from its contents; the CD job does not check out the repository. Pull requests run the application build and artifact archiving; they do not construct a release image.
+Artifacts are named `release-artifact-<owner>--<repository>-<SHA>-<runner>`. OCI image packaging, deployment, and runtime testing remain later materializer stages. A build does not construct or publish an image.
 
-Local build outputs are development outputs, never release inputs. Release jobs use the committed `ubuntu-24.04-arm` runner selection and Linux/ARM64 image configuration. The consuming deployment IaC must select the matching runtime platform; no emulation or cross-compilation is used.
+Local outputs remain development feedback. Release artifacts come from the native fleet runner selected for the target platform; image packaging and deployment must use the matching OS/CPU and compatible runtime libraries.
 
-Image-builder setup belongs to the GitHub workflow; the consuming deployment pipeline owns runtime testing. The application flake contains application build and runtime dependencies; it does not provide pipeline tools. Nix is installed on the application-build runner and inside the Dockerfile for the runtime environment, but not on the CD runner.
-
-GitHub's artifact actions provide the handoff between workflows: CD runs after CI completes successfully on a push to `main` and downloads `release-artifact-${{ github.event.workflow_run.head_sha }}` from `${{ github.event.workflow_run.id }}`, using the workflow's GitHub token with `actions: read` permission. Both the downloaded artifact and exported OCI archive are named for that CI commit, rather than CD's default-branch commit. GitHub automatically checks the uploaded artifact's digest on download; a mismatch is reported as a warning. See [GitHub artifact documentation](https://docs.github.com/en/actions/tutorials/store-and-share-data#validating-artifacts).
-
-The workflow exports an OCI-layout tar archive (`oci-image.tar`) as a pipeline artifact. The consuming deployment pipeline imports or publishes it with an OCI-compatible tool. Registry publication and environment deployment are integration points for the consuming project's infrastructure pipeline. Publish once and promote the same image digest. Select ARM64 in Lambda or Linux/ARM64 in ECS/CDK; matching runtime libraries remain part of native dependency validation.
-
-### Deployment testing
-
-The consuming application's deployment pipeline must test the actual packaged image with its intended entrypoint and configuration:
-
-* Integration tests exercise application behavior with real dependencies in a pre-production environment.
-* Smoke tests confirm that a deployed release starts and successfully handles essential requests; for Lambda, invoke the deployed function and check the result.
-* Continuous canary tests exercise important workflows. During gradual production rollout, use their results and release-specific error and latency metrics to stop or roll back unhealthy releases.
-
-Publish each candidate once and deploy the same image digest through these stages. These templates provide application checks and image packaging; they do not configure deployment infrastructure or implement integration, smoke, or canary tests. Successful packaging alone does not establish that the application runs correctly.
-
-The rationale and the rejected alternatives are recorded in [Design Rationale](#design-rationale). The planned multi-repository composition is described in [Future Four-Template Product Pipeline](#future-four-template-product-pipeline).
+The design choices and future product architecture are documented in the linked [concept pages](#concepts).
 
 ## 4. Workflows
 
@@ -143,7 +123,7 @@ Correctness is guaranteed by idempotency: dying at any point (including SIGKILL,
 
 ## 6. Output
 
-The application build produces fleet artifacts; a separate packaging stage produces a Linux/ARM64 container image that runs on container runtimes through `Main` and on AWS Lambda through `LambdaHandler`. Both entry points share the execution and business logic. The `Dockerfile` has one `CMD` line per entry point; keep exactly one uncommented. The AWS integrations are examples; the template can also support other cloud providers.
+The application build produces fleet artifacts; a consuming packaging stage can produce a container image that runs on container runtimes through `Main` and on AWS Lambda through `LambdaHandler`. Both entry points share the execution and business logic. The `Dockerfile` has one `CMD` line per entry point; keep exactly one uncommented. The AWS integrations are examples; the template can also support other cloud providers.
 
 | Runtime | `CMD` |
 |---|---|
@@ -222,182 +202,12 @@ Follow the instructions here: <https://nader-najjar.notion.site/Visual-Studio-Co
 * Main Documentation Page: <https://docs.hibernate.org/validator/9.1/reference/en-US/html_single/>
 * Anchor To Available Annotations: <https://docs.hibernate.org/validator/9.1/reference/en-US/html_single/#section-builtin-constraints>
 
-## Design Rationale
+## Concepts
 
-Date: 2026-10-11
+- [Build and OCI Image Packaging](https://app.notion.com/p/3f90a2b787558157a5c2cf7a9b7e92cc?pvs=204)
+- [Product Release Pipelines Across Repositories](https://app.notion.com/p/3f90a2b7875581ef953bca201941e0dd?pvs=204)
+- [Deployment Testing and Promotion](https://app.notion.com/p/3f90a2b7875581de812ffaddc1e44b83?pvs=204)
 
-Status: Accepted; application-build and image-packaging jobs implemented.
+## License
 
-### Scope
-
-This record describes the ideal release architecture, including Bazel as the intended build system. This repository is the legacy demonstration: it uses Gradle and Nix, with the custom `universal-build` interface, and does not use Bazel. It demonstrates the same CI/CD separation through a self-replicating, pinned Nix environment for local builds, fleet CI, and the runtime JDK. The goal is hermetic builds; the implemented legacy flow uses Gradle for the Java payload and GitHub Actions for artifact bundling and OCI image packaging. Bazel-specific flows below describe the ideal case rather than this repository's implementation.
-
-### Decision
-
-Separate the application build from release image packaging:
-
-1. Fleet CI builds and tests application artifacts on native Linux runners for the chosen runtime CPU architecture.
-2. A separate packaging step consumes those release artifacts and assembles the OCI image.
-3. The consuming deployment pipeline publishes the candidate, tests it in deployment environments, and promotes the same image digest through a monitored rollout.
-
-Bazel owns compilation and packaging definitions. The pipeline orchestrates when to invoke them. OCI packaging uses Bazel image rules and does not require Docker or a Dockerfile; runtime testing belongs to the consuming deployment pipeline.
-
-Local builds provide development feedback. Local outputs do not become release inputs. A local macOS build and a Linux release build may produce different platform-specific artifacts without violating hermeticity.
-
-### Constraints
-
-- The standard release target is Linux/ARM64. Release builds use native execution. Emulation and cross-compilation are excluded from the standard path.
-- Fleet build runners, release artifacts, OCI images, and deployment targets agree on Linux and CPU architecture. Native toolchains and system libraries must also be compatible with the runtime image.
-- Runner OS family/release and CPU architecture, Bazel version, toolchains, dependencies, base-image digests, image platforms, and deployment architecture are declared in committed configuration.
-- GitHub-hosted runner labels select OS release and architecture, not an immutable snapshot of every installed package. Build tools and dependencies are controlled through Bazel rather than assumed from the runner's installed software.
-- Hermeticity requires pinned, declared inputs and isolation from undeclared host state. Bazel does not guarantee this merely by being present; the build rules must satisfy it.
-
-### Goal and the three options
-
-The goal is one reusable setup that introduces no OS/CPU compatibility failure for any supported application type, including applications with native executables, native libraries, and native package dependencies. Developers may use different workstation OS families and CPU architectures. Emulation and cross-compilation are excluded. A design that works only because today's dependencies happen to be portable is insufficient.
-
-This is a platform-compatibility requirement, not a claim that builds can never fail because of code defects, unavailable infrastructure, or incompatible undeclared dependencies.
-
-#### Option 1: Application build in CI; image packaging in a separate CD stage — selected
-
-Release flow:
-
-```text
-Committed source and pinned build configuration
-    -> native fleet CI runner matching the target Linux/CPU platform
-    -> Bazel compilation, tests, and checks
-    -> versioned release artifacts
-    -> separate CD packaging stage assembles the OCI image
-    -> image publication
-    -> pre-production deployment and integration/smoke testing
-    -> monitored production rollout of the same image digest to the matching runtime platform
-```
-
-Local development flow:
-
-```text
-Committed source and pinned build configuration
-    -> local Bazel compilation, tests, and checks for the workstation platform
-    -> local development outputs, never used as release packaging inputs
-```
-
-Required alignment: the fleet application's build platform, release artifacts, image, and runtime agree on target OS family and CPU architecture. Native toolchains and runtime libraries are compatible. The workstation need not match the release platform because its artifacts do not enter the release path.
-
-This avoids both counterexamples below. Release-platform responsibility is enforced by committed fleet, build, packaging, and deployment configuration. Local checks remain development feedback; they do not replace fleet checks or deployment testing of the release image.
-
-#### Option 2: Docker wraps compilation and image packaging — rejected for this goal
-
-Flow, used both locally and in fleet CI:
-
-```text
-Committed source
-    -> Docker build targeting the runtime OS/CPU
-    -> compilation, tests, and checks inside a builder stage
-    -> compiled artifacts copied into the runtime-image stage
-    -> image publication
-    -> pre-production deployment and integration/smoke testing
-    -> deployment
-```
-
-Required alignment: the builder stage and runtime image target the runtime OS/CPU. With native execution only, the machine executing the builder must also support that target CPU architecture. A Linux VM on macOS can supply Linux, but does not change the host CPU architecture.
-
-**Counterexample:** a developer has an ARM64 Mac while the production target is Linux/x86_64. The Docker build contains a native compilation step targeting x86_64. The ARM64 workstation cannot execute that x86_64 builder natively. Allowing the build to default to ARM64 instead produces artifacts for the wrong release CPU. Emulation, cross-compilation, or moving execution to a matching remote builder would be required; the first two are excluded and the third does not provide the promised complete local build.
-
-**Reason for rejection:** Docker removes the workstation OS-userland mismatch but cannot guarantee a complete native local release build on every workstation CPU. It therefore fails the universal local/fleet goal under the stated constraints.
-
-#### Option 3: Host compilation followed by image construction in the same local/CI build — rejected for this goal
-
-Flow, used both locally and in fleet CI:
-
-```text
-Committed source
-    -> compilation, tests, and checks directly on the build host
-    -> host-built application artifacts
-    -> Docker build or OCI assembly copies artifacts into a Linux runtime image
-    -> image publication
-    -> pre-production deployment and integration/smoke testing
-    -> deployment
-```
-
-Required alignment: any native host-built artifacts must match the runtime image's OS/CPU and compatible runtime libraries. Merely selecting a Linux image does not convert copied artifacts to Linux.
-
-**Counterexample:** a developer compiles a native Node.js addon on macOS/ARM64, then the image build copies it into a Linux/ARM64 image. The CPU architecture matches, but the macOS native binary cannot be loaded as a Linux shared library. Targeting a Linux/x86_64 image would add a CPU mismatch as well. Pure Java bytecode or JavaScript may work, but that does not make the structure safe for every application type.
-
-**Reason for rejection:** the same build interface accepts platform-specific workstation artifacts as inputs to a different runtime platform. A universal template cannot assume all current and future dependencies are portable.
-
-#### Why Bazel favors the selected option
-
-Bazel supports explicit application-artifact and image-packaging targets, declared toolchains, action caching, and OCI layer assembly. The separate packaging stage can use Bazel OCI rules without Docker or a Dockerfile. The pipeline orchestrates the stages while the repository defines how to produce their outputs.
-
-Options 2 and 3 are rejected for this goal and its constraints, not declared invalid for projects with narrower requirements. The decision follows from the concrete counterexamples, not a claim that companies never use those approaches.
-
-### Artifact boundary
-
-The packaging step must identify and consume the exact versioned fleet artifacts, together with the pinned packaging inputs. It must not substitute local outputs or silently recompile the application under a different environment. Artifact identities must remain traceable to the tested source revision.
-
-CI checks out its run's source revision and packages all image-build inputs with the compiled payload. The separate CD workflow listens for CI completion on `main` and packages only successful push runs. GitHub's artifact actions scope the download to the triggering CI run using `${{ github.event.workflow_run.id }}` and the workflow's token with `actions: read` permission. CD uses only that archive; its input and output artifact names include the CI commit `${{ github.event.workflow_run.head_sha }}`, rather than CD's default-branch commit. The CD workflow must be present on the default branch before GitHub can trigger it. The upload action creates an immutable artifact; download automatically checks its digest, reporting a warning if it differs. This pipeline uses that managed handoff instead of maintaining its own revision stamps and checksum manifests. See [GitHub artifact documentation](https://docs.github.com/en/actions/tutorials/store-and-share-data).
-
-Image construction occurs once per release candidate before runtime validation. Environment promotion changes deployment configuration, not the image contents. Base-image or toolchain updates create new release candidates and go through validation again.
-
-For multiple runtime architectures, produce and validate a release candidate for each architecture. Lambda deployment selects one architecture's image rather than the combined OCI index.
-
-### Pipeline tooling boundary
-
-The committed runner and image configuration select Linux/ARM64; the consuming deployment IaC must select the same runtime platform. Pipeline scripts do not repeat this configuration as runtime assertions or compare a self-assigned platform marker with a constant. The GitHub artifact handoff from the exact CI run replaces custom revision markers and checksum manifests.
-
-Application manifests, dependency locks, and Nix flakes define application build and runtime dependencies. Image-builder and container-runtime setup belongs to the pipeline configuration under `.github/`; application build commands do not invoke those pipeline tools.
-
-The Dockerfile templates use Docker's official actions in their CD jobs, with pinned action commits, a pinned Buildx version, and a BuildKit image digest. Nix remains in application CI and inside the Dockerfile for the runtime environment; the CD runner does not install Nix. Bazel continues to assemble images with OCI rules. Packaging does not execute the application image; the Bazel packaging job needs no Docker daemon.
-
-### Deployment testing
-
-The consuming application's deployment pipeline must test the actual packaged image with its intended entrypoint and configuration:
-
-* Integration tests exercise application behavior with real dependencies in a pre-production environment.
-* Smoke tests confirm that a deployed release starts and successfully handles essential requests; for Lambda, invoke the deployed function and check the result.
-* Continuous canary tests exercise important workflows. During gradual production rollout, use their results and release-specific error and latency metrics to stop or roll back unhealthy releases.
-
-Publish each candidate once and deploy the same image digest through these stages. These templates provide application checks and image packaging; they do not configure deployment infrastructure or implement integration, smoke, or canary tests. Successful packaging alone does not establish that the application runs correctly.
-
-### Future Four-Template Product Pipeline
-
-Status: Planned; the integrated example has not been implemented.
-
-For a product composed of independently built packages, the recommended structure is package-owned CI and a central product release pipeline. The first integrated example will connect four future templates: IaC, Java with Bazel, Python with Bazel, and TypeScript with Bazel.
-
-```text
-IaC repository              -> CI -> tested infrastructure artifacts --+
-Java/Bazel repository       -> CI -> tested application artifacts -----+
-Python/Bazel repository     -> CI -> tested application artifacts -----+-> Product pipeline repository
-TypeScript/Bazel repository -> CI -> tested application artifacts -----+   -> select exact package versions
-                                                                          -> assemble and publish OCI images
-                                                                          -> deploy infrastructure and services
-                                                                          -> integration and smoke tests
-                                                                          -> monitored production promotion
-```
-
-Each package repository owns compilation, tests, quality checks, and its complete release artifact. Application artifacts include the pinned inputs needed for OCI packaging; infrastructure artifacts include the deployment inputs and referenced assets needed by the infrastructure tool. Runtime payloads retain the native Linux/ARM64 release-platform contract. CI uploads artifacts under a consistent name such as `release-artifact-${{ github.sha }}`.
-
-The product pipeline repository owns image packaging, deployment order, environment configuration, integration and smoke testing, canary monitoring, promotion, and rollback. It consumes the tested package artifacts without recompiling application code. It assembles each candidate image once, publishes it, and promotes the same digest through deployment environments. The IaC deployment selects those published images and the matching runtime architecture.
-
-A product release selects a specific compatible set of package versions. Record each package's repository, commit SHA, producing CI run ID, and artifact name or ID. Each repository has its own commit SHA; a SHA suffix alone does not identify the complete product release or distinguish CI reruns. The pipeline can be mostly `.github/`; workflow inputs or committed release configuration identify the selected artifacts and deployment sequence. Preserve that release selection with the published outputs so deployment and rollback are repeatable.
-
-GitHub supports artifact downloads from another repository by supplying its repository, producing run ID, artifact name or ID, and a token with the required access. The default `GITHUB_TOKEN` is scoped to its own repository; use suitable cross-repository credentials, such as a GitHub App installation token with access to the participating repositories. See [artifact downloads](https://github.com/actions/download-artifact/tree/v4#download-artifacts-from-other-workflow-runs-or-repositories) and [GitHub token scope](https://docs.github.com/en/actions/concepts/security/github_token).
-
-Cross-repository orchestration requires an explicit trigger. The current templates' `workflow_run` trigger connects workflows within one repository. In the future integrated example, successful package CI can notify the product pipeline through `repository_dispatch`, passing its artifact identifiers. The product pipeline selects the complete release set and confirms the producing runs succeeded before packaging or deploying. See [GitHub repository dispatch](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#repository_dispatch).
-
-GitHub workflow artifacts provide the CI handoff and expire according to their retention policy. Retain published OCI images, infrastructure deployment artifacts, and any other inputs required for supported rollbacks in durable registry or object storage. See [GitHub artifact retention](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts).
-
-This plan is the recommended composition pattern for the future templates. The current legacy demonstration keeps its packaging workflow in the package repository until a product pipeline and integrated use case exist.
-
-### Implementation state
-
-CD jobs do not check out the source repository. The Dockerfile templates' archives contain the complete Docker build context. The Bazel archive contains a standalone packaging workspace with `image/BUILD.bazel`, the compiled JAR, and the pinned module/tool configuration; its OCI rules are separate from source-compilation definitions. Packaging tools may fetch declared base images and pinned toolchain dependencies.
-
-The Gradle template's `build` includes `installDist`, which assembles application and dependency JARs under `build/release/executable/lib`. The CI tar command bundles that payload with the Dockerfile, runtime Nix files, and ignore file from the checkout. Gradle owns application packaging; the workflow owns the CD artifact bundle, transfer, and image construction.
-
-The templates provide separate CI and CD workflow files, each with its own job on a native Linux/ARM64 runner. CD uses the `workflow_run` event to wait for CI completion on `main`, requires a successful push run, downloads that exact CI run's named artifact, and exports the image archive. CI runs for pull requests and pushes to `main`; CD does not package pull-request artifacts. Bazel OCI assembly has no application-compilation dependency. The legacy JavaScript fleet build compiles the Lambda client's native addon before artifact transfer.
-
-The workflow exports an OCI-layout tar archive named `oci-image.tar`, using the shared OCI image format. The Dockerfile workflows select the OCI exporter; Bazel archives its OCI layout directly without a Docker-format conversion or container-loader target. Registry publication and environment deployment belong to the consuming project's infrastructure pipeline and are not configured here. The packaging workflow does not establish runtime correctness; deployment tests must do so.
-
-The release path needs successful fleet execution. This legacy Java change does not require regenerating its existing dependency lockfiles. This record does not claim that the existing local builds have been audited for full hermeticity.
+All rights reserved. See [LICENSE](LICENSE).

@@ -67,9 +67,9 @@ RUN printf '%s\n' \
   ". /custom-software/runtime-workspace/nix-env.sh" \
   'set +a' \
   "exec java -XX:MaxRAMPercentage=75.0 -cp '/custom-software/runtime-workspace/executable/lib/*' \"\$@\"" \
-  > /custom-software/runtime-workspace/run-application && \
-  chmod +x /custom-software/runtime-workspace/run-application
+  > /custom-software/runtime-workspace/run-executable && \
+  chmod +x /custom-software/runtime-workspace/run-executable
 
-ENTRYPOINT ["/custom-software/runtime-workspace/run-application"]
+ENTRYPOINT ["/custom-software/runtime-workspace/run-executable"]
 CMD ["io.template.Main"]
 # CMD ["com.amazonaws.services.lambda.runtime.api.client.AWSLambda", "io.template.LambdaHandler::handleRequest"]
