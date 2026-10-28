@@ -123,42 +123,13 @@ Correctness is guaranteed by idempotency: dying at any point (including SIGKILL,
 
 ## 6. Output
 
-The application build produces fleet artifacts; a consuming packaging stage can produce a container image that runs on container runtimes through `Main` and on AWS Lambda through `LambdaHandler`. Both entry points share the execution and business logic. The `Dockerfile` has one `CMD` line per entry point; keep exactly one uncommented. The AWS integrations are examples; the template can also support other cloud providers.
+The application build produces fleet artifacts; a consuming packaging stage can produce a container image that runs on container runtimes through `Main`. The AWS integrations are examples; the template can also support other cloud providers.
 
 | Runtime | `CMD` |
 |---|---|
-| Container, ECS task, Kubernetes, EC2 host (default) | `io.template.Main` |
-| AWS Lambda | `com.amazonaws.services.lambda.runtime.api.client.AWSLambda io.template.LambdaHandler::handleRequest` |
+| Container, ECS task, Kubernetes, EC2 host | `io.template.Main` |
 
 The image's entrypoint applies the Nix runtime environment, then runs `java -XX:MaxRAMPercentage=75.0` on the jars in the distribution's `lib/`, followed by the `CMD`. The JDK and OS userland that run in production are the ones pinned by `flake.lock` and the `Dockerfile`, on every runtime.
-
-### OCI / Container (`Main`)
-
-* For a container, ECS task, EC2 host or command-line run
-
-For a Lambda-only application, remove:
-
-* `src/main/java/io/template/Main.java` and its JaCoCo exclude in `build.gradle.kts`
-* The Shutdown section above and `closeResources` in `composition/AWSClientsModule.java`, including its unused `Injector` import
-* The `Main` `CMD` line in the `Dockerfile`, and uncomment the Lambda one
-
-### AWS Lambda (`LambdaHandler`)
-
-* Lambda runs the image's entrypoint and `CMD`, so `java` starts the Lambda runtime interface client (`AWSLambda`), which polls the Lambda Runtime API and calls `LambdaHandler::handleRequest` for each event
-* The event JSON reaches `Executor` as its single input argument
-* Publish the packaged image to Amazon ECR. In CDK or another infrastructure tool, configure the Lambda function to use that existing image by digest and select ARM64. Promote the same image through deployment environments; infrastructure deployment does not rebuild it.
-* Lambda does not patch the JDK or OS inside an image. Patches arrive when `flake.lock` or the `Dockerfile` base image moves and the image is rebuilt
-* The Shutdown section does not apply: Lambda freezes and later discards the execution environment without signaling the process, so clients live for the environment's lifetime
-
-To keep only OCI/container deployment, remove:
-
-* `src/main/java/io/template/LambdaHandler.java` and its JaCoCo exclude in `build.gradle.kts`
-* The `aws-lambda-java-core` and `aws-lambda-java-runtime-interface-client` dependencies
-* The Lambda `CMD` line in the `Dockerfile`
-
-After removing an entry point, update this Output section and regenerate the Gradle lockfile using the workflow above. Keep the shared environment, execution, Guice modules, and DynamoDB sample unless you also choose to remove that sample.
-
-* Reference: <https://docs.aws.amazon.com/lambda/latest/dg/java-image.html>
 
 &nbsp;
 
