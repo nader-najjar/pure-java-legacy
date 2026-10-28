@@ -55,7 +55,6 @@ RUN mkdir -p /custom-software/runtime-workspace && \
 #     - Creates an entrypoint runtime wrapper that:
 #         - Applies the flake-defined runtime dev shell environment recorded at image build time
 #         - Runs java on the distribution's lib/ jars, with the main class and its arguments taken from CMD
-#     - Keep exactly one CMD uncommented: Main for container runtimes (ECS, Fargate, Kubernetes, a host), LambdaHandler for AWS Lambda
 #
 
 COPY executable /custom-software/runtime-workspace/executable
@@ -72,4 +71,3 @@ RUN printf '%s\n' \
 
 ENTRYPOINT ["/custom-software/runtime-workspace/run-executable"]
 CMD ["io.template.Main"]
-# CMD ["com.amazonaws.services.lambda.runtime.api.client.AWSLambda", "io.template.LambdaHandler::handleRequest"]
