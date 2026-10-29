@@ -18,8 +18,6 @@ import org.slf4j.LoggerFactory;
  * supplied by the consuming application:
  *   - `Main.java`
  *   - `composition/*`
- *
- * <p>For the shutdown pattern, see the README's Shutdown section.
  */
 public final class Main {
 

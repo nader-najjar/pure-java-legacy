@@ -32,10 +32,6 @@ Java best practices.
 * Uses Gradle's Distribution plugin to assemble the application JAR and runtime dependency JARs under `build/release/executable/lib`, without generated launch scripts
 * Packages `build/release-artifact.tar.gz` with the runtime JARs and image-build inputs, without constructing an image
 
-### Release archive
-
-The build produces `build/release-artifact.tar.gz`, containing `Dockerfile`, `flake.nix`, `flake.lock`, `.dockerignore`, and `executable/lib/` with the application and runtime dependency JARs. Image packaging can extract this archive directly as its complete build context without recompiling the application.
-
 ### `./universal-build clean`
 
 * Removes build output directories
@@ -49,14 +45,6 @@ The build produces `build/release-artifact.tar.gz`, containing `Dockerfile`, `fl
 * Invokes Gradle's tasks command, showing all available tasks
 
 &nbsp;
-
-## Materialization
-
-Artifacts are named `release-artifact-<owner>--<repository>-<SHA>-<runner>`. OCI image packaging, deployment, and runtime testing remain later materializer stages. A build does not construct or publish an image.
-
-Local outputs remain development feedback. Release artifacts come from the native fleet runner selected for the target platform; image packaging and deployment must use the matching OS/CPU and compatible runtime libraries.
-
-The design choices and future product architecture are documented in the linked [concept pages](#concepts).
 
 ## 4. Workflows
 
@@ -100,40 +88,7 @@ The design choices and future product architecture are documented in the linked 
 
 &nbsp;
 
-## 5. Shutdown
-
-Shutdown pattern (implemented in `Main`):
-
-1. SIGTERM (or SIGINT/SIGHUP) fires the shutdown hook, which interrupts the main thread and waits up to `SHUTDOWN_GRACE_PERIOD_SECONDS` seconds for main to finish. Keep that grace period below the platform's SIGTERM-to-SIGKILL timeout (ECS and Kubernetes default to 30s)
-2. Main clears the interrupt, performs all resource cleanup in its own `finally` block, then releases the hook
-3. The JVM exits after the hook thread returns. On a normal exit the hook returns at once. After a signal the process exits with 128 + the signal number (143 for SIGTERM) regardless of main's exit code
-
-Work must respond to that interrupt:
-
-* The interrupt aborts interruptible waits (sleep, queue and latch waits, `Future.get`, SDK retry backoff) by throwing an exception, which should propagate up to `Main`
-* Classic `java.net` socket I/O, `synchronized` and `Lock.lock()` ignore the interrupt, so a call already in flight runs until it returns or times out; normal calls finish well within `SHUTDOWN_GRACE_PERIOD_SECONDS`
-* Never swallow `InterruptedException`: declare it, or call `Thread.currentThread().interrupt()` and rethrow it wrapped
-* Only `Main` calls `System.exit`; elsewhere throw so the exception reaches `Main`
-* CPU-bound loops check `Thread.currentThread().isInterrupted()` between iterations
-* Work on other threads is not interrupted; main must stop it in its `finally` block
-
-Correctness is guaranteed by idempotency: dying at any point (including SIGKILL, which bypasses hooks entirely) leaves the system in a consistent state. Graceful shutdown only improves efficiency - it is never required for correctness.
-
-&nbsp;
-
-## 6. Output
-
-The application build produces fleet artifacts; a consuming packaging stage can produce a container image that runs on container runtimes through `Main`. The AWS integrations are examples; the template can also support other cloud providers.
-
-| Runtime | `CMD` |
-|---|---|
-| Container, ECS task, Kubernetes, EC2 host | `io.template.Main` |
-
-The image's entrypoint applies the Nix runtime environment, then runs `java -XX:MaxRAMPercentage=75.0` on the jars in the distribution's `lib/`, followed by the `CMD`. The JDK and OS userland that run in production are the ones pinned by `flake.lock` and the `Dockerfile`, on every runtime.
-
-&nbsp;
-
-## 7. IDE Setup
+## 5. IDE Setup
 
 ### IntelliJ IDEA Ultimate
 
@@ -147,7 +102,7 @@ Follow the instructions here: <https://nader-najjar.notion.site/Visual-Studio-Co
 
 &nbsp;
 
-## 8. References
+## 6. References
 
 ### Nix
 
@@ -178,6 +133,7 @@ Follow the instructions here: <https://nader-najjar.notion.site/Visual-Studio-Co
 - [Build and OCI Image Packaging](https://app.notion.com/p/3f90a2b787558157a5c2cf7a9b7e92cc?pvs=204)
 - [Product Release Pipelines Across Repositories](https://app.notion.com/p/3f90a2b7875581ef953bca201941e0dd?pvs=204)
 - [Deployment Testing and Promotion](https://app.notion.com/p/3f90a2b7875581de812ffaddc1e44b83?pvs=204)
+- [Shutdown Concepts](https://app.notion.com/p/4080a2b78755818a93b6c7ffa13a809d)
 
 ## License
 
