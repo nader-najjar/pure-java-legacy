@@ -1,140 +1,165 @@
 # pure-java-legacy
 
-Java best practices.
+> Java best practices.
 
-&nbsp;
+### 1. Prerequisites
 
-## 1. Local Development Machine Prerequisites
+---
 
-* Install Nix as per <https://nix.dev/install-nix>
-  * Nix handles all other requirements so that developer machine setup is as minimal as possible
-    * Further, it does not matter what version of Nix you have - it guarantees reproducibility
-  * If, after an Apple update, nix is not found on PATH, follow <https://github.com/NixOS/nix/issues/7880> and add the snippet to `~/.zshrc` instead
+- macOS or Linux on ARM64 or x86-64, as configured in `flake.nix`.
+- Install [Nix](https://nix.dev/install-nix).
+- Network access for uncached toolchains and dependencies.
 
-&nbsp;
+Run the commands below from the repository root.
 
-## 2. Tips
+### 2. Build and Test
 
-* Run `echo "alias ub='./universal-build'" >> ~/.zshrc` then `source ~/.zshrc` to make `ub` a quick alias for `./universal-build`
-* Add the Nix snippet to your `~/.zshrc` so it is never wiped by system updates (snippet: <https://github.com/NixOS/nix/issues/7880>)
+---
 
-&nbsp;
+#### Everyday Commands
 
-## 3. Main Build Tasks
+| Goal | Command |
+| --- | --- |
+| Compile production Java only | `./universal-build compileJava` |
+| Compile production and test Java without running tests | `./universal-build testClasses` |
+| Run all unit tests, without lint or packaging | `./universal-build test` |
+| Run one test class | `./universal-build test --tests 'io.template.samplebusinesslayer.CalculatorTest'` |
+| Run one test method | `./universal-build test --tests 'io.template.samplebusinesslayer.CalculatorTest.calculatesAddition'` |
+| Check source style | `./universal-build checkstyleMain checkstyleTest` |
+| Run static bug analysis | `./universal-build spotbugsMain spotbugsTest` |
+| Generate coverage report | `./universal-build jacocoTestReport` |
+| Verify all checks without packaging | `./universal-build check` |
+| Assemble runnable JARs without checks | `./universal-build installDist` |
+| Package release without checks | `./universal-build packageRelease` |
+| Full verification and packaging | `./universal-build build` |
+| Remove build outputs | `./universal-build clean` |
+| List available tasks | `./universal-build tasks --all` |
 
-### `./universal-build build`
+Tasks run their prerequisites: tests and SpotBugs compile needed classes; packaging compiles and assembles runtime dependencies. `build` runs tests, the 80% coverage gate, Checkstyle, SpotBugs, and Javadoc checks, and produces release artifacts.
 
-* Compiles the code under `src`
-* Runs unit tests
-* Runs Jacoco
-* Runs Checkstyle
-* Runs SpotBugs
-* Uses Gradle's Distribution plugin to assemble the application JAR and runtime dependency JARs under `build/release/executable/lib`, without generated launch scripts
-* Packages `build/release-artifact.tar.gz` with the runtime JARs and image-build inputs, without constructing an image
+Gradle skips up-to-date work. Useful command flags:
 
-### `./universal-build clean`
+- `--rerun-tasks`: force the selected tasks and their prerequisites to execute.
+- `--dry-run`: show the task graph without executing tasks.
+- `--stacktrace`: show failure details.
 
-* Removes build output directories
+#### Outputs
 
-### `./universal-build help`
+- Test results: `build/reports/tests/test/index.html`.
+- Coverage: `build/reports/jacoco/test/html/index.html` after `jacocoTestReport`; the coverage gate alone does not generate this report.
+- Checkstyle and SpotBugs: `build/reports/checkstyle/` and `build/reports/spotbugs/`.
+- Runnable application and dependencies: `build/release/executable/lib/`.
+- Release archive: `build/release-artifact.tar.gz`.
 
-* Invokes Gradle's help command, showing basic functionality
+### 3. Development Workflows
 
-### `./universal-build tasks`
+---
 
-* Invokes Gradle's tasks command, showing all available tasks
+#### Dependency Management
 
-&nbsp;
+Edit `build.gradle.kts`:
 
-## 4. Workflows
+- Add: `implementation("group:artifact:version")` (`testImplementation` for tests).
+- Remove: delete the declaration and its usages.
+- Upgrade/pin: change the version, or the BOM/constraint that supplies it.
 
-### Adding A Java Dependency
+Refresh locks after adding or removing dependencies:
 
-1) Find the coordinates on Maven Central (<https://central.sonatype.com>) or the library’s docs.
-2) Add the dependency with an explicit version in the right scope:
-   * `implementation("group:artifact:version")`
-   * `compileOnly("group:artifact:version")`
-   * `annotationProcessor("group:artifact:version")`
-   * `runtimeOnly("group:artifact:version")`
-   * Tests mirror these scopes: `testImplementation`, `testCompileOnly`, `testAnnotationProcessor`, `testRuntimeOnly`
-3) Update the Gradle lockfile using the workflow below
-4) Run `./universal-build build` to download and verify it resolves; use an IDE “reload Gradle project” if needed.
+```sh
+./universal-build dependencies --write-locks
+```
 
-### Updating Gradle Lockfile
+For a targeted version update, replace `group:artifact`:
 
-1) Run `./universal-build dependencies --write-locks`
+```sh
+./universal-build dependencies --update-locks group:artifact
+```
 
-### Adding A Toolchain Dependency
+Inspect a selected version or conflict:
 
-1) Search <https://search.nixos.org/packages> for the package name
-2) Add the appropriate package to the package list in the `flake.nix` file
+```sh
+./universal-build dependencyInsight --dependency group:artifact --configuration runtimeClasspath
+```
 
-### Updating Nix `nixpkgs` Version
+Use `testRuntimeClasspath` for test dependencies.
 
-1) Modify the version of `inputs.nixpkgs.url` in the `flake.nix` file to the desired version, according to <https://status.nixos.org>
-2) Run `./universal-build --update-nix-flake-lockfile` to update the `flake.lock` lockfile
-3) Commit both files to version control
+#### Toolchain Changes
 
-### Ensuring Gradle Files Are Up-To-Date
+| Change | Files and steps |
+| --- | --- |
+| Java version | Change `chosenJdk` in `flake.nix` and `JavaLanguageVersion.of(...)` in `build.gradle.kts` together. The runtime shell uses the same JDK. |
+| Add a CLI tool | Add its Nix package to the development shell's `packages` in `flake.nix`. |
+| Nix package set | Change `inputs.nixpkgs.url` in `flake.nix`, then run `./universal-build --update-nix-flake-lockfile`. Review and commit `flake.nix` and `flake.lock`. |
+| Gradle version | Run `./universal-build wrapper --gradle-version X.Y.Z`, then `./universal-build wrapper` to refresh wrapper files with the new version. Review `gradle/wrapper/`, `gradlew`, and `gradlew.bat`. |
+| Build plugin or analysis tool | Change its plugin version or `toolVersion` in `build.gradle.kts`; regenerate dependency locks if its resolved dependencies change. |
 
-1) Run `./universal-build wrapper` to update the (this is just a pass-through to `./gradlew wrapper`)
-   * This connects to the internet to reset the local self-contained Gradle files to the factory default of the given version. Note that this keeps the same Gradle version.
-   * This can help if the Gradle files were stale or modified for some reason (for example, IntelliJ's starting Gradle template gives incorrect files in some cases)
+After toolchain changes, run `./universal-build build` and refresh the IDE's JDK path.
 
-### Upgrading Gradle Version
+### 4. IDE Setup
 
-1) Run `./universal-build wrapper --gradle-version x.y`
-   * This connects to the internet to reset the local self-contained Gradle files to the factory default of the given version.
+---
 
-&nbsp;
+Print the pinned JDK location:
 
-## 5. IDE Setup
+```sh
+./universal-build --print-java-path-for-ide
+```
 
-### IntelliJ IDEA Ultimate
+Use that path for the project SDK and Gradle JVM. Import the project as Gradle and use its wrapper, not a separately installed Gradle.
 
-Follow the instructions here: <https://nader-najjar.notion.site/JetBrains-IDE-Setup-Usage-Guide-d9b0a2b78755822f9d03819f5f02feb2?source=copy_link>
-    * Use the command `./universal-build --print-java-path-for-ide` to get the local nix installation of the java version specified in the flake
+- [IntelliJ IDEA Ultimate setup](https://app.notion.com/p/f4c0a2b7875583b79fa5015d58412fea)
+- [Visual Studio Code setup](https://app.notion.com/p/4fd0a2b787558204a6c001d0b034f698)
 
-### Visual Studio Code
+Reload Gradle after dependency changes. Reprint the JDK path after Nix/toolchain changes.
 
-Follow the instructions here: <https://nader-najjar.notion.site/Visual-Studio-Code-Setup-Usage-Guide-f4e0a2b7875583be9293817d26459034?source=copy_link>
-    * Use the command `./universal-build --print-java-path-for-ide` to get the local nix installation of the java version specified in the flake
+### 5. Concepts
 
-&nbsp;
+---
 
-## 6. References
-
-### Nix
-
-* Installation: <https://nix.dev/install-nix>
-* Nix Versions: <https://status.nixos.org>
-* Nix Package Search: <https://search.nixos.org/packages>
-
-### Maven
-
-* Maven Central Search: <https://central.sonatype.com>
-
-### Jackson
-
-* Jackson Databind Javadoc: <https://javadoc.io/doc/com.fasterxml.jackson.core/jackson-databind/latest/index.html>
-* Jackson Databind GitHub README Tutorial: <https://github.com/FasterXML/jackson-databind>
-* Jackson Databind Wiki (Including Databind-Specific Annotations): <https://github.com/FasterXML/jackson-databind/wiki>
-* Jackson Annotations Javadoc: <https://javadoc.io/doc/com.fasterxml.jackson.core/jackson-annotations/latest/com.fasterxml.jackson.annotation/com/fasterxml/jackson/annotation/package-summary.html>
-* Jackson Annotations GitHub README Tutorial: <https://github.com/FasterXML/jackson-annotations>
-* Jackson Annotations Wiki: <https://github.com/FasterXML/jackson-annotations/wiki>
-
-### Hibernate
-
-* Main Documentation Page: <https://docs.hibernate.org/validator/9.1/reference/en-US/html_single/>
-* Anchor To Available Annotations: <https://docs.hibernate.org/validator/9.1/reference/en-US/html_single/#section-builtin-constraints>
-
-## Concepts
-
-- [Build and OCI Image Packaging](https://app.notion.com/p/3f90a2b787558157a5c2cf7a9b7e92cc?pvs=204)
-- [Product Release Pipelines Across Repositories](https://app.notion.com/p/3f90a2b7875581ef953bca201941e0dd?pvs=204)
-- [Deployment Testing and Promotion](https://app.notion.com/p/3f90a2b7875581de812ffaddc1e44b83?pvs=204)
+- [Product Release Pipelines Across Repositories](https://app.notion.com/p/3f90a2b7875581ef953bca201941e0dd)
+- [Deployment Testing and Promotion](https://app.notion.com/p/3f90a2b7875581de812ffaddc1e44b83)
 - [Shutdown Concepts](https://app.notion.com/p/4080a2b78755818a93b6c7ffa13a809d)
 
-## License
+### 6. Appendix
+
+---
+
+#### Gradle Dependency Reference
+
+Use these inside `dependencies { ... }` in `build.gradle.kts`. Replace `...` with `"group:artifact:version"`; omit the version when a BOM supplies it.
+
+| Declaration | Available when |
+| --- | --- |
+| `implementation(...)` | Compiling and running production code |
+| `compileOnly(...)` | Compiling production code only |
+| `runtimeOnly(...)` | Running production code only |
+| `annotationProcessor(...)` | Processing annotations during production compilation |
+| `testImplementation(...)` | Compiling and running tests |
+| `testCompileOnly(...)` | Compiling tests only |
+| `testRuntimeOnly(...)` | Running tests only |
+| `testAnnotationProcessor(...)` | Processing annotations during test compilation |
+
+These additionally require the `java-library` plugin, which this project does not apply:
+
+| Declaration | Use |
+| --- | --- |
+| `api(...)` | A library dependency also exposed to consumers at compile time |
+| `compileOnlyApi(...)` | Compile-only dependency also needed by consumers to compile |
+
+Other dependency forms:
+
+| Example | Use |
+| --- | --- |
+| `implementation(platform("group:bom:version"))` | Import a BOM's version constraints |
+| `implementation(enforcedPlatform("group:bom:version"))` | Force the BOM's versions, including for consumers; use cautiously |
+| `constraints { implementation("group:artifact:version") }` | Constrain a dependency's version without adding it |
+| `implementation(project(":module"))` | Depend on another project in the same Gradle build |
+| `implementation(files("libs/library.jar"))` | Depend on a local JAR; transitive dependencies are not declared for you |
+
+Reference: [Java configurations](https://docs.gradle.org/current/userguide/java_plugin.html#sec:java_plugin_and_dependency_management), [library API configurations](https://docs.gradle.org/current/userguide/java_library_plugin.html#sec:java_library_configurations_graph), [dependency types](https://docs.gradle.org/current/userguide/declaring_dependencies_basics.html).
+
+### License
+
+---
 
 All rights reserved. See [LICENSE](LICENSE).
